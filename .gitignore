@@ -1,0 +1,6 @@
+mrworker/main/*.so
+mrworker/main/*.log
+mrcoodinator/go.mod
+mrworker/go.mod
+mrcoodinator/mrcoordinator
+mrworker/main/mrworker
