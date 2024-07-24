@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/rpc"
@@ -16,9 +15,7 @@ import (
 	"time"
 )
 
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
@@ -38,8 +35,8 @@ var directory string = ""
 
 var cIP string
 var cPort string
-var wIP string = "192.168.31.193"
-var wPort string = "8002"
+var wIP string
+var wPort string
 
 // cache for interupted reduce task
 var hasCacheIntermedia bool = false
@@ -47,29 +44,26 @@ var cacheIntermedia []KeyValue
 var cacheIndex int
 var reduceID int
 
-//
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string, coordinatorIP string, coordinatorPort string, workerIP string, workerPort string) {
 	log.SetOutput(os.Stdout)
-	// log.SetOutput(ioutil.Discard)
+	// log.SetOutput(io.Discard)
 	log.SetFlags(log.Lshortfile)
 	log.Print("Worker starts")
 
 	// set IP and port for both coordinator and worker
 	cIP = coordinatorIP
 	cPort = coordinatorPort
-	if len(workerPort) != 0 {
-		wPort = workerPort
-	}
-	if len(workerIP) != 0 {
-		wIP = workerIP
-	}
-	log.Print("Local IP address: ", wIP)
+	wIP = workerIP
+	wPort = workerPort
+	log.Print("Worker IP and port: ", wIP, ":", wPort)
 
 	// Init directory for reduce files
-	remove_dirs()
-	dirName := wIP + "-" + wPort
+	dirName := "tmp-" + wIP + "-" + wPort
+	err := os.Mkdir(dirName, 0777)
+	if err != nil {
+		os.RemoveAll(dirName)
+	}
 	os.Mkdir(dirName, 0777)
 	directory = "./" + dirName + "/"
 
@@ -115,7 +109,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		noticeArgs.Files = noticeFiles
 		var reply bool
 		noticeCall(&noticeArgs, &reply)
-		if task.TaskType == 1 && reply == true {
+		if task.TaskType == 1 && reply {
 			for _, url := range task.Files {
 				err := deleteFileFromWorker(url)
 				if err != nil {
@@ -126,33 +120,17 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 		time.Sleep(time.Second)
 	}
-
 }
 
-// Remove all files in a directory
-func remove_dirs() {
-	files, err := ioutil.ReadDir(".")
-	if err != nil {
-		log.Fatal("Error while reading dir: ", err)
-	}
-
-	for _, file := range files {
-		filename := file.Name()
-		if file.IsDir() {
-			os.RemoveAll("./" + filename)
-		}
-	}
-}
-
-//
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func taskCall(reply *Task) int {
 	c, err := rpc.DialHTTP("tcp", cIP+":"+cPort)
 	if err != nil {
 		log.Println("Coordinator terminated, tasks done")
+		// Remove tmp folder
+		os.RemoveAll(directory)
 		return 0
 	}
 	defer c.Close()
@@ -172,11 +150,9 @@ func taskCall(reply *Task) int {
 	return 2
 }
 
-//
 // send an RPC notice to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong or the coordinator response false.
-//
 func noticeCall(args *NoticeArgs, reply *bool) bool {
 	c, err := rpc.DialHTTP("tcp", cIP+":"+cPort)
 	// c, err := rpc.DialHTTP("unix", cSock)
@@ -187,7 +163,7 @@ func noticeCall(args *NoticeArgs, reply *bool) bool {
 	defer c.Close()
 
 	err = c.Call("Coordinator.HandleNotice", args, reply)
-	if err == nil && *reply == true {
+	if err == nil && *reply {
 		return true
 	}
 	return false
@@ -334,7 +310,7 @@ func getFileFromCoordinator(filename string) []byte {
 		log.Fatal("Error while getting file from coordinator:", err)
 	}
 	defer resp.Body.Close()
-	content, err := io.ReadAll(resp.Body)
+	content, _ := io.ReadAll(resp.Body)
 	return content
 }
 
@@ -346,7 +322,7 @@ func postFileToCoordinator(filename string, fileBytes []byte) {
 		log.Fatal("Error while posting file to coordinator:", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	log.Print(string(body))
 }
 
@@ -358,7 +334,7 @@ func getFileFromWorker(url string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	content, err := io.ReadAll(resp.Body)
+	content, _ := io.ReadAll(resp.Body)
 	return content, nil
 }
 
@@ -376,10 +352,8 @@ func deleteFileFromWorker(url string) error {
 	return nil
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
@@ -407,7 +381,7 @@ func workerHttpHandler(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		fileBytes, err := ioutil.ReadFile(filepath)
+		fileBytes, err := os.ReadFile(filepath)
 		if err != nil {
 			log.Fatal("Error while opening file: ", err)
 		}

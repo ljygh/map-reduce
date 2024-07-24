@@ -28,26 +28,14 @@ func main() {
 	mapf, reducef := loadPlugin(os.Args[1])
 	cIP := os.Args[2]
 	cPort := os.Args[3]
-	var wIP string
-	var wPort string
-	if len(os.Args) > 4 {
-		wIP = os.Args[4]
-	} else {
-		wIP = ""
-	}
-	if len(os.Args) > 5 {
-		wPort = os.Args[5]
-	} else {
-		wPort = ""
-	}
+	wIP := os.Args[4]
+	wPort := os.Args[5]
 
 	mr.Worker(mapf, reducef, cIP, cPort, wIP, wPort)
 }
 
-//
 // load the application Map and Reduce functions
 // from a plugin file, e.g. ../mrapps/wc.so
-//
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	log.Print(filename)
 	p, err := plugin.Open(filename)

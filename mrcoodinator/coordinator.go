@@ -1,7 +1,7 @@
 package main
 
 import (
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -45,7 +45,7 @@ var httpDir string = "./"
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int, cPort string) *Coordinator {
 	log.SetOutput(os.Stdout)
-	// log.SetOutput(ioutil.Discard)
+	// log.SetOutput(io.Discard)
 	// outFile, _ := os.Open("../coordinator.log")
 	// log.SetOutput(outFile)
 	log.SetFlags(log.Lshortfile)
@@ -56,8 +56,8 @@ func MakeCoordinator(files []string, nReduce int, cPort string) *Coordinator {
 		port = cPort
 	}
 
-	// remove all mr-out-* files
-	remove_mr_out_files_and_dirs()
+	// Create 'results' folder and remove all files in it
+	create_results_folder()
 
 	// init coordinator data structure
 	c := Coordinator{}
@@ -92,19 +92,28 @@ func MakeCoordinator(files []string, nReduce int, cPort string) *Coordinator {
 }
 
 // Remove all mr-out-* files
-func remove_mr_out_files_and_dirs() {
-	files, err := ioutil.ReadDir(".")
+func create_results_folder() {
+	path := "./results"
+
+	// Check if the folder exists.
+	_, err := os.Stat(path)
+	if err != nil {
+		// Create the folder if it doesn't exist.
+		err := os.Mkdir(path, 0777)
+		if err != nil {
+			log.Fatalf("Fail to create 'results' folder: %s\n", err)
+		}
+		return
+	}
+
+	files, err := os.ReadDir(path)
 	if err != nil {
 		log.Fatal("Error while reading dir: ", err)
 	}
 
 	for _, file := range files {
 		filename := file.Name()
-		if file.IsDir() {
-			os.RemoveAll("./" + filename)
-		} else if strings.HasPrefix(filename, "mr-out") {
-			os.Remove("./" + filename)
-		}
+		os.Remove(path + "/" + filename)
 	}
 }
 
@@ -151,7 +160,7 @@ func httpHandler(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		fileBytes, err := ioutil.ReadFile(filename)
+		fileBytes, err := os.ReadFile(filename)
 		if err != nil {
 			log.Fatal("Error while opening file: ", err)
 		}
@@ -162,14 +171,14 @@ func httpHandler(w http.ResponseWriter, req *http.Request) {
 		log.Println("Receive POST")
 		filename := req.URL.Path
 		log.Println("Receive file:", filename)
-		filename = "." + filename
+		filename = "./results" + filename
 
 		if _, err := os.Stat(filename); os.IsNotExist(err) {
 			file, err := os.Create(filename)
 			if err != nil {
 				log.Fatal("Error while creating file: ", err)
 			}
-			body, err := ioutil.ReadAll(req.Body)
+			body, err := io.ReadAll(req.Body)
 			if err != nil {
 				log.Fatal(err)
 			}

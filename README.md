@@ -11,6 +11,10 @@ This is an implementation of map reduce algorithm according to the paper: [1]Jef
 7. Coordinator failure: States of data structures in coordinator need to be saved to a checkpoint periodly. If the coordinator dies, a new coordinator should be re-started based on the checkpoint.
 
 ## Build
+Go version:
+```
+go version go1.22.5 linux/amd64
+```
 Coordinator:
 ```
 cd mrcoordinator
@@ -26,7 +30,8 @@ go build -o mrworker
 ```
 MrApps:
 ```
-cd mrworker/mrapps
+cd mrworker/main
+mkdir apps
 bash build_mrapps.sh
 ```
 
@@ -34,10 +39,12 @@ bash build_mrapps.sh
 Coordinator:
 ```
 cd mrcoordinator
-./mrcoordinator pg*.txt
+mkdir results
+./mrcoordinator task/* (can be changed to other files)
 ```
 Worker:
 ```
-cd mrworker
-bash startWorkers.sh wc.so
+cd mrworker/main
+mkdir logs
+bash startWorkers.sh apps/wc.so
 ```

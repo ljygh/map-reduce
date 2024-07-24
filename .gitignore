@@ -4,3 +4,6 @@ mrcoodinator/go.mod
 mrworker/go.mod
 mrcoodinator/mrcoordinator
 mrworker/main/mrworker
+mrcoodinator/results/
+mrworker/main/apps/
+mrworker/main/logs/

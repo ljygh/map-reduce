@@ -41,7 +41,7 @@ func main() {
 	}
 
 	m := MakeCoordinator(os.Args[fileStart:], 10, port)
-	for m.Done() == false {
+	for !m.Done() {
 		time.Sleep(time.Second)
 	}
 
