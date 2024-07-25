@@ -197,10 +197,11 @@ func httpHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 // Your code here -- RPC handlers for the worker to call.
+// Handle requests from workers and assign a task with reply.
 func (c *Coordinator) HandleRequest(args *int, reply *Task) error {
 	log.Println("Handle request")
 	c.ch <- 1
-	if len(c.mapTasks) != 0 { // map task left
+	if len(c.mapTasks) != 0 { // Map task left, reply a map task.
 		task := c.mapTasks[0]
 		reply.TaskType = 0
 		reply.TaskID = task.mapID
@@ -212,11 +213,11 @@ func (c *Coordinator) HandleRequest(args *int, reply *Task) error {
 
 		log.Print("Response, task type: ", reply.TaskType, " task ID: ", reply.TaskID, " task file: ", reply.Files, " NReduce: ", reply.NReduce)
 		c.printCoordinator()
-	} else if len(c.inProcessMapTasks) != 0 { // no map task left but some map task is executing
+	} else if len(c.inProcessMapTasks) != 0 { // No map task left but some map tasks are executing, wait for all map tasks to complete, reply (no tasks avaiable)
 		reply.TaskType = 2
-	} else if _, ok := c.inProcessReduceTasks[*args]; ok && isHandlingCompleteMapWorkerDie {
+	} else if _, ok := c.inProcessReduceTasks[*args]; ok && isHandlingCompleteMapWorkerDie { // If it is handling map worker failure, don't assign a reduce task. 处理完failure之后会进入下一个选择。
 		reply.TaskType = 2
-	} else if task, ok := c.inProcessReduceTasks[*args]; ok { // request for executing reduce task
+	} else if task, ok := c.inProcessReduceTasks[*args]; ok { // This worker requested to continue to do a reduce task interupted by failure of map worker. Assign the in-progress reduce task to it.
 		log.Print("Update file locations for in process reduce task worker")
 		reply.TaskType = 1
 		reply.TaskID = task.reduceID
@@ -225,7 +226,7 @@ func (c *Coordinator) HandleRequest(args *int, reply *Task) error {
 
 		log.Print("Response, task type: ", reply.TaskType, " task ID: ", reply.TaskID, " task file: ", reply.Files, " NReduce: ", reply.NReduce)
 		c.printCoordinator()
-	} else if len(c.reduceTasks) != 0 { // reduce task left
+	} else if len(c.reduceTasks) != 0 { // Reduce task left, reply reduce task.
 		task := c.reduceTasks[0]
 		reply.TaskType = 1
 		reply.TaskID = task.reduceID
@@ -244,41 +245,43 @@ func (c *Coordinator) HandleRequest(args *int, reply *Task) error {
 	return nil
 }
 
+// Handle notice from workers.
 func (c *Coordinator) HandleNotice(args *NoticeArgs, reply *bool) error {
 	log.Print("Handle notice")
 	c.ch <- 1
 	log.Print("Notice worker address: ", args.WorkerAddr)
 	log.Print("Task ID: ", args.TaskID)
-	if _, ok := c.inProcessMapTasks[args.TaskID]; args.TaskType == 0 && ok { // map task done
+	if _, ok := c.inProcessMapTasks[args.TaskID]; args.TaskType == 0 && ok { // Map task done
 		log.Printf("Map task %v done", args.TaskID)
 
-		if _, ok := c.completeMapTasks[args.WorkerAddr]; ok {
+		if _, ok := c.completeMapTasks[args.WorkerAddr]; ok { // There are already completed map tasks.
 			taskSlice := c.completeMapTasks[args.WorkerAddr]
 			taskSlice = append(taskSlice, c.inProcessMapTasks[args.TaskID])
 			c.completeMapTasks[args.WorkerAddr] = taskSlice
-		} else {
+		} else { // The first completed map task.
 			taskSlice := []*MapTask{}
 			taskSlice = append(taskSlice, c.inProcessMapTasks[args.TaskID])
 			c.completeMapTasks[args.WorkerAddr] = taskSlice
 		}
 		delete(c.inProcessMapTasks, args.TaskID)
 
+		// Update files of reduce tasks
 		for _, task := range c.reduceTasks {
 			task.files[args.TaskID] = args.Files[task.reduceID]
 		}
-		if isHandlingCompleteMapWorkerDie { // update inProcessReduceTasks files
+		if isHandlingCompleteMapWorkerDie { // Update inProcessReduceTasks files, if it is handling a failure of map worker.
 			for _, task := range c.inProcessReduceTasks {
 				task.files[args.TaskID] = args.Files[task.reduceID]
 			}
 		}
 
-		if len(c.mapTasks) == 0 && len(c.inProcessMapTasks) == 0 { // change back  to normal state from re-executing map task
+		if len(c.mapTasks) == 0 && len(c.inProcessMapTasks) == 0 { // Switch back to normal state from re-executing map task.
 			isHandlingCompleteMapWorkerDie = false
 		}
 
 		c.printCoordinator()
 		*reply = true
-	} else if _, ok = c.inProcessReduceTasks[args.TaskID]; args.TaskType == 1 && ok { // reduce task done
+	} else if _, ok = c.inProcessReduceTasks[args.TaskID]; args.TaskType == 1 && ok { // Reduce task done
 		log.Printf("Reduce task %v done", args.TaskID)
 		delete(c.inProcessReduceTasks, args.TaskID)
 		c.printCoordinator()
@@ -299,17 +302,21 @@ func (c *Coordinator) checkWorkers() {
 		c.ch <- 1
 
 		if !isHandlingCompleteMapWorkerDie {
-			for workerAddr, mapTaskSlice := range c.completeMapTasks { // check complete map workers
+			for workerAddr, mapTaskSlice := range c.completeMapTasks { // Check complete map workers.
 				conn, err := net.Dial("tcp", workerAddr)
-				if err != nil && (len(c.mapTasks) != 0 || len(c.inProcessMapTasks) != 0) {
+				if err != nil && (len(c.mapTasks) != 0 || len(c.inProcessMapTasks) != 0) { // A complete map worker died in map stage.
 					log.Print("Complete map task worker dies: ", workerAddr)
 					log.Print("Map stage")
+
+					// Put the map task back to unassigned map tasks.
 					for _, mapTask := range mapTaskSlice {
 						mapTask.runTime = 0
 						c.mapTasks = append(c.mapTasks, mapTask)
 					}
 					delete(c.completeMapTasks, workerAddr)
 
+					// Change corresponding files of reduce tasks back to 'null'.
+					// 继续正常分配任务就行了，不用进入特殊状态： isHandlingCompleteMapWorkerDie.
 					for _, reduceTask := range c.reduceTasks {
 						for i, file := range reduceTask.files {
 							if strings.HasPrefix(file, "http://"+workerAddr) {
@@ -319,15 +326,18 @@ func (c *Coordinator) checkWorkers() {
 					}
 
 					c.printCoordinator()
-				} else if err != nil {
+				} else if err != nil { // In reduce stage.
 					log.Print("Complete map task worker dies: ", workerAddr)
 					log.Print("Reduce stage")
+
+					// Put the map task back to unassigned map tasks.
 					for _, mapTask := range mapTaskSlice {
 						mapTask.runTime = 0
 						c.mapTasks = append(c.mapTasks, mapTask)
 					}
 					delete(c.completeMapTasks, workerAddr)
 
+					// 进入特殊状态, map task重新做完之后会解除这个特殊状态。
 					isHandlingCompleteMapWorkerDie = true
 					c.printCoordinator()
 				} else {
@@ -336,7 +346,7 @@ func (c *Coordinator) checkWorkers() {
 			}
 		}
 
-		for taskID, task := range c.inProcessMapTasks { // check inProcessMapTasks
+		for taskID, task := range c.inProcessMapTasks { // Check inProcessMapTasks，有异常重新分配。
 			task.runTime++
 			c.inProcessMapTasks[taskID] = task
 			if task.runTime >= 10 {
@@ -349,7 +359,7 @@ func (c *Coordinator) checkWorkers() {
 		}
 
 		if !isHandlingCompleteMapWorkerDie {
-			for taskID, task := range c.inProcessReduceTasks { // check inProcessReduceTasks
+			for taskID, task := range c.inProcessReduceTasks { // Check inProcessReduceTasks，有异常重新分配。
 				task.runTime++
 				c.inProcessReduceTasks[taskID] = task
 				if task.runTime >= 10 {

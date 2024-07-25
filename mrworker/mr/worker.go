@@ -29,8 +29,6 @@ func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
-// var directory string = "../main/"
-
 var directory string = ""
 
 var cIP string
@@ -39,6 +37,9 @@ var wIP string
 var wPort string
 
 // cache for interupted reduce task
+// 在做reduce task的过程中，如果发现了一个completed map worker died，set hasCacheIntermedia to true.
+// 保存reduce task ID 并缓存key value，以及继续执行的index。
+// 如果有缓存的话，申请任务是加上reduce ID，这样如果是reduce task的话，会继续分配这个任务。
 var hasCacheIntermedia bool = false
 var cacheIntermedia []KeyValue
 var cacheIndex int
